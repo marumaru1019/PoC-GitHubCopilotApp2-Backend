@@ -5,6 +5,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Mac M1/M2 を使用している場合は以下の行のコメントアウトを外す
+    # platform: linux/amd64
     container_name: helpdesk-backend
     ports:
       - "8000:8000"

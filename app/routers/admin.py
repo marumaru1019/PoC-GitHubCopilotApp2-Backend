@@ -37,10 +37,10 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 def list_users(
     skip: int = Query(0, ge=0),
     limit: int = Query(25, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    """Get list of users."""
+    """Get list of users (admin only)."""
     users = db.query(User).offset(skip).limit(limit).all()
     return users
 
