@@ -1,0 +1,1 @@
+- コードの末尾に Created-By コメントを追加してください。例えば、`// Created-By: GitHub Copilot` のように記述します。
