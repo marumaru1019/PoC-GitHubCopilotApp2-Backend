@@ -44,15 +44,16 @@ def list_tickets(
     priority: Optional[str] = Query(None),
     assignee_id: Optional[str] = Query(None),
     category_id: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(25, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Get list of tickets with filters."""
+    """Get list of tickets with filters and search."""
     # Requesters can only see their own tickets
     requester_id = None if current_user.role in ["operator", "admin"] else current_user.id
-    
+
     tickets = ticket_service.get_tickets(
         db=db,
         status=status,
@@ -60,10 +61,11 @@ def list_tickets(
         assignee_id=assignee_id,
         requester_id=requester_id,
         category_id=category_id,
+        search=search,
         skip=skip,
         limit=limit,
     )
-    
+
     # Get total count
     total = ticket_service.count_tickets(
         db=db,
@@ -72,8 +74,9 @@ def list_tickets(
         assignee_id=assignee_id,
         requester_id=requester_id,
         category_id=category_id,
+        search=search,
     )
-    
+
     return {
         "items": tickets,
         "total": total,
@@ -92,11 +95,11 @@ def get_ticket(
     ticket = ticket_service.get_ticket(db, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    
+
     # Check permission: requesters can only view their own tickets
     if current_user.role == "requester" and ticket.requester_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to view this ticket")
-    
+
     return ticket
 
 
@@ -111,10 +114,10 @@ def update_ticket(
     ticket = ticket_service.get_ticket(db, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    
+
     # Prepare update data
     updates = ticket_data.model_dump(exclude_unset=True)
-    
+
     # Handle tags separately
     if "tags" in updates:
         tag_names = updates.pop("tags")
@@ -130,7 +133,7 @@ def update_ticket(
                     tag = Tag(id=str(uuid.uuid4()), name=tag_name, created_at=datetime.utcnow())
                     db.add(tag)
                 ticket.tags.append(tag)
-    
+
     return ticket_service.update_ticket(db, ticket, current_user.id, **updates)
 
 
@@ -145,37 +148,37 @@ def transition_status(
     ticket = ticket_service.get_ticket(db, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    
+
     # Check permission
     if current_user.role == "requester":
         # Requesters can only change their own tickets
         if ticket.requester_id != current_user.id:
             raise HTTPException(status_code=403, detail="Not authorized to change ticket status")
-        
+
         # Requesters can only perform specific status transitions
         allowed_transitions = {
             "WAITING_CUSTOMER": ["IN_PROGRESS"],  # Customer provides additional info
             "RESOLVED": ["CLOSED"],               # Customer confirms resolution
         }
-        
+
         current_status = ticket.status
         if current_status not in allowed_transitions:
             raise HTTPException(
-                status_code=403, 
+                status_code=403,
                 detail=f"Cannot change status from {current_status}. Only allowed from WAITING_CUSTOMER or RESOLVED."
             )
-        
+
         if transition_data.status not in allowed_transitions[current_status]:
             raise HTTPException(
                 status_code=403,
                 detail=f"Cannot transition from {current_status} to {transition_data.status}"
             )
-    
+
     # Validate status transition
     valid_statuses = ["OPEN", "IN_PROGRESS", "WAITING_CUSTOMER", "RESOLVED", "CLOSED", "CANCELED"]
     if transition_data.status not in valid_statuses:
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
-    
+
     return ticket_service.transition_ticket_status(
         db, ticket, transition_data.status, current_user.id
     )
@@ -193,7 +196,7 @@ def assign_ticket(
     ticket = ticket_service.get_ticket(db, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    
+
     return ticket_service.assign_ticket(db, ticket, assignee_id, assigned_team_id, current_user.id)
 
 
@@ -208,15 +211,15 @@ def create_comment(
     ticket = ticket_service.get_ticket(db, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    
+
     # Check permission for viewing ticket
     if current_user.role == "requester" and ticket.requester_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to comment on this ticket")
-    
+
     # Only operators/admins can create internal comments
     if comment_data.is_internal and current_user.role not in ["operator", "admin"]:
         raise HTTPException(status_code=403, detail="Not authorized to create internal comments")
-    
+
     comment = ticket_service.create_comment(
         db, ticket, current_user.id, comment_data.content, comment_data.is_internal
     )
@@ -233,13 +236,13 @@ def get_comments(
     ticket = ticket_service.get_ticket(db, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    
+
     # Check permission for viewing ticket
     if current_user.role == "requester" and ticket.requester_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to view this ticket")
-    
+
     # Include internal comments only for operators/admins
     include_internal = current_user.role in ["operator", "admin"]
-    
+
     comments = ticket_service.get_ticket_comments(db, ticket_id, include_internal)
     return comments

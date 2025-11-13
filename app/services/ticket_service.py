@@ -15,7 +15,7 @@ def generate_ticket_number(db: Session) -> str:
     last_ticket = db.query(Ticket).order_by(Ticket.created_at.desc()).first()
     if not last_ticket:
         return "TKT-00001"
-    
+
     # Extract number from last ticket
     last_number = int(last_ticket.ticket_number.split("-")[1])
     new_number = last_number + 1
@@ -34,7 +34,7 @@ def create_ticket(
     """Create a new ticket."""
     ticket_id = str(uuid.uuid4())
     ticket_number = generate_ticket_number(db)
-    
+
     ticket = Ticket(
         id=ticket_id,
         ticket_number=ticket_number,
@@ -47,7 +47,7 @@ def create_ticket(
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
-    
+
     # Add tags if provided
     if tag_names:
         for tag_name in tag_names:
@@ -56,14 +56,14 @@ def create_ticket(
                 tag = Tag(id=str(uuid.uuid4()), name=tag_name, created_at=datetime.utcnow())
                 db.add(tag)
             ticket.tags.append(tag)
-    
+
     db.add(ticket)
     db.commit()
     db.refresh(ticket)
-    
+
     # Reload ticket with relationships
     ticket = get_ticket(db, ticket.id)
-    
+
     # Create audit log
     create_audit_log(
         db,
@@ -73,7 +73,7 @@ def create_ticket(
         entity_id=ticket.id,
         metadata={"ticket_number": ticket.ticket_number, "title": title},
     )
-    
+
     return ticket
 
 
@@ -100,10 +100,11 @@ def get_tickets(
     assignee_id: Optional[str] = None,
     requester_id: Optional[str] = None,
     category_id: Optional[str] = None,
+    search: Optional[str] = None,
     skip: int = 0,
     limit: int = 25,
 ) -> List[Ticket]:
-    """Get tickets with filters."""
+    """Get tickets with filters and search."""
     query = db.query(Ticket).options(
         joinedload(Ticket.category),
         joinedload(Ticket.requester),
@@ -111,7 +112,7 @@ def get_tickets(
         joinedload(Ticket.assigned_team),
         joinedload(Ticket.tags),
     )
-    
+
     if status:
         query = query.filter(Ticket.status == status)
     if priority:
@@ -122,10 +123,10 @@ def get_tickets(
         query = query.filter(Ticket.requester_id == requester_id)
     if category_id:
         query = query.filter(Ticket.category_id == category_id)
-    
+    if search:
+        query = query.filter(Ticket.title.ilike(f"%{search}%"))
+
     return query.order_by(Ticket.created_at.desc()).offset(skip).limit(limit).all()
-
-
 def count_tickets(
     db: Session,
     status: Optional[str] = None,
@@ -133,10 +134,11 @@ def count_tickets(
     assignee_id: Optional[str] = None,
     requester_id: Optional[str] = None,
     category_id: Optional[str] = None,
+    search: Optional[str] = None,
 ) -> int:
-    """Count tickets with filters."""
+    """Count tickets with filters and search."""
     query = db.query(Ticket)
-    
+
     if status:
         query = query.filter(Ticket.status == status)
     if priority:
@@ -147,10 +149,10 @@ def count_tickets(
         query = query.filter(Ticket.requester_id == requester_id)
     if category_id:
         query = query.filter(Ticket.category_id == category_id)
-    
+    if search:
+        query = query.filter(Ticket.title.ilike(f"%{search}%"))
+
     return query.count()
-
-
 def update_ticket(
     db: Session,
     ticket: Ticket,
@@ -159,16 +161,16 @@ def update_ticket(
 ) -> Ticket:
     """Update ticket fields."""
     old_values = {}
-    
+
     for key, value in updates.items():
         if value is not None and hasattr(ticket, key):
             old_values[key] = getattr(ticket, key)
             setattr(ticket, key, value)
-    
+
     ticket.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(ticket)
-    
+
     # Create audit log
     if old_values:
         create_audit_log(
@@ -179,7 +181,7 @@ def update_ticket(
             entity_id=ticket.id,
             metadata={"old": old_values, "new": updates},
         )
-    
+
     return ticket
 
 
@@ -191,7 +193,7 @@ def transition_ticket_status(
 ) -> Ticket:
     """Transition ticket status with SLA tracking."""
     old_status = ticket.status
-    
+
     # Track status transitions for SLA
     if new_status == "WAITING_CUSTOMER" and old_status != "WAITING_CUSTOMER":
         # Start waiting timer
@@ -202,18 +204,18 @@ def transition_ticket_status(
             duration = (datetime.utcnow() - ticket.waiting_customer_started_at).total_seconds()
             ticket.total_waiting_customer_duration += int(duration)
             ticket.waiting_customer_started_at = None
-    
+
     if new_status == "RESOLVED" and not ticket.resolved_at:
         ticket.resolved_at = datetime.utcnow()
-    
+
     if new_status == "CLOSED" and not ticket.closed_at:
         ticket.closed_at = datetime.utcnow()
-    
+
     ticket.status = new_status
     ticket.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(ticket)
-    
+
     # Create audit log
     create_audit_log(
         db,
@@ -223,7 +225,7 @@ def transition_ticket_status(
         entity_id=ticket.id,
         metadata={"old_status": old_status, "new_status": new_status},
     )
-    
+
     return ticket
 
 
@@ -237,13 +239,13 @@ def assign_ticket(
     """Assign ticket to user or team."""
     old_assignee = ticket.assignee_id
     old_team = ticket.assigned_team_id
-    
+
     ticket.assignee_id = assignee_id
     ticket.assigned_team_id = assigned_team_id
     ticket.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(ticket)
-    
+
     # Create audit log
     create_audit_log(
         db,
@@ -258,7 +260,7 @@ def assign_ticket(
             "new_team_id": assigned_team_id,
         },
     )
-    
+
     return ticket
 
 
@@ -279,19 +281,19 @@ def create_comment(
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
-    
+
     db.add(comment)
-    
+
     # Track first response time (FRT) - only for public comments by operator/admin
     if not is_internal and not ticket.first_response_at:
         author = db.query(Tag).filter(Tag.id == author_id).first()
         if author and author.role in ["operator", "admin"]:
             ticket.first_response_at = datetime.utcnow()
             ticket.updated_at = datetime.utcnow()
-    
+
     db.commit()
     db.refresh(comment)
-    
+
     # Create audit log
     create_audit_log(
         db,
@@ -301,7 +303,7 @@ def create_comment(
         entity_id=ticket.id,
         metadata={"comment_id": comment.id, "is_internal": is_internal},
     )
-    
+
     return comment
 
 
@@ -316,10 +318,10 @@ def get_ticket_comments(
         .options(joinedload(Comment.author))
         .filter(Comment.ticket_id == ticket_id)
     )
-    
+
     if not include_internal:
         query = query.filter(Comment.is_internal == False)
-    
+
     return query.order_by(Comment.created_at.asc()).all()
 
 
